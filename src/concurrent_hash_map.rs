@@ -71,6 +71,7 @@ enum InlineVec <T> {
     Dynamic(Vec<LinkedList<T>>)
 }
 
+/// A Segment is a write locked subset of a hashmap. Multiple reads can be done concurrently on a single segment.
 pub struct Segment <K, V> where K: Hash + PartialEq + Clone, V: Clone{
     count: AtomicUsize,
     table: RwLock<InlineVec<HashEntry<K, V>>>,
