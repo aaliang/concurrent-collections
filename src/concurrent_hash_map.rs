@@ -28,7 +28,23 @@ impl <K, V> ConcurrentHashMap <K, V> where K: Hash + PartialEq + Clone, V: Clone
         self.segments[segment].get(key, hash)
     }
 
-    pub fn insert (&mut self, key: K, val: V) {
+    /// Beware! do you really want to use this method?
+    /// this is terribly unsafe. returning a mutable reference from here allows bypassing of the rwlock which is extremely dangerous in multithreaded use. use extremely sparingly
+    /// if possible use ConcurrentHashMap::get_modify
+    pub fn get_mut(&self, key: &K) -> Option<&mut V> {
+        let hash = Self::make_hash(key);
+        let segment = self.segment_index(hash);
+        self.segments[segment].get_mut(key, hash)
+    }
+
+    /// Searchs for key in the hashmap. if a value exists, calls func on the value yielding a new value which is replaced in the same transaction
+    pub fn get_modify <F> (&self, key: &K, func: F) -> Option<&V> where F: Fn(&V) -> V {
+        let hash = Self::make_hash(key);
+        let segment = self.segment_index(hash);
+        self.segments[segment].get_modify(key, hash, func)
+    }
+
+    pub fn insert (&self, key: K, val: V) {
         let hash = Self::make_hash(&key);
         let segment = self.segment_index(hash);
         self.segments[segment].insert(key, hash, val);
@@ -71,7 +87,7 @@ impl <K, V> Segment <K, V> where K: Hash + PartialEq + Clone, V: Clone {
             capacity: 8
         }
     }
-    pub fn insert (&mut self, key: K, hash: usize, val: V) {
+    pub fn insert (&self, key: K, hash: usize, val: V) {
         let mut table = self.table.write().unwrap();
         let mut tab = match *table {
             InlineVec::Static(_, ref mut arr) => &mut arr[..],
@@ -101,18 +117,16 @@ impl <K, V> Segment <K, V> where K: Hash + PartialEq + Clone, V: Clone {
         self.count.fetch_add(1, Ordering::SeqCst);
     }
 
-    pub fn get <'a> (&'a self, key: &K, hash: usize) -> Option<&V> {
+    pub fn get (&self, key: &K, hash: usize) -> Option<&V> {
         let count = self.count.load(Ordering::SeqCst);
         if count == 0 {
             None
         } else {
             let read = self.table.read().unwrap();
-
             let tab = match *read {
                 InlineVec::Static(_, ref arr) => (&arr[..]),
                 InlineVec::Dynamic(ref vec) => (&vec[..])
             };
-
             let index = hash & (self.capacity - 1);
             match tab[index].iter().find(|e| e.key == *key && e.hash == hash) {
                 None => None,
@@ -120,6 +134,55 @@ impl <K, V> Segment <K, V> where K: Hash + PartialEq + Clone, V: Clone {
                     let as_raw_ptr = &s.val as *const V;
                     //return some questionably unsafe dereferenced raw pointer
                     Some(unsafe{&*as_raw_ptr})
+                }
+            }
+        }
+    }
+
+    //see ConcurrentHashMap::get_mut above.
+    pub fn get_mut (&self, key: &K, hash: usize) -> Option<&mut V> {
+        let count = self.count.load(Ordering::SeqCst);
+        if count == 0 {
+            None
+        } else {
+            let mut write = self.table.write().unwrap();
+            let mut tab = match *write {
+                InlineVec::Static(_, ref mut arr) => &mut arr[..],
+                InlineVec::Dynamic(ref mut vec) => &mut vec[..]
+            };
+            let index = hash & (self.capacity - 1);
+            match tab[index].iter_mut().find(|e| e.key == *key && e.hash == hash) {
+                None => None,
+                Some(s) => {
+                    let as_raw_ptr = &mut s.val as *mut V;
+                    Some(unsafe{&mut *as_raw_ptr})
+                }
+            }
+        }
+    }
+
+    pub fn get_modify <F> (&self, key: &K, hash: usize, func: F) -> Option<&V> where F: Fn(&V) -> V {
+        let count = self.count.load(Ordering::SeqCst);
+        if count == 0 {
+            None
+        } else {
+            let mut write = self.table.write().unwrap();
+            let mut tab = match *write {
+                InlineVec::Static(_, ref mut arr) => &mut arr[..],
+                InlineVec::Dynamic(ref mut vec) => &mut vec[..]
+            };
+            let index = hash & (self.capacity - 1);
+            match tab[index].iter_mut().find(|e| e.key == *key && e.hash == hash) {
+                None => None,
+                Some(s) =>  {
+                    let new_val = func(&s.val);
+                    *s = HashEntry {
+                        hash: hash,
+                        key: key.clone(),
+                        val: new_val
+                    };
+                    let as_raw_ptr = &mut s.val as *mut V;
+                    Some(unsafe{&mut *as_raw_ptr})
                 }
             }
         }
