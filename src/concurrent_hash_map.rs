@@ -196,7 +196,7 @@ impl <K, V> Segment <K, V> where K: Hash + PartialEq + Clone, V: Clone {
 }
 
 #[derive(Clone)]
-pub struct HashEntry <K, V> where K: Hash + Clone, V: Clone {
+struct HashEntry <K, V> where K: Hash + Clone, V: Clone {
     key: K,
     val: V,
     hash: usize
