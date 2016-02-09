@@ -4,6 +4,7 @@ use std::sync::RwLock;
 use std::{ptr, mem};
 
 pub struct ConcurrentHashMap <K, V> where K: Hash + PartialEq + Clone, V: Clone {
+    // for now there are 16 segments
     segments: [Segment<K, V>; 16]
 }
 
@@ -21,6 +22,7 @@ impl <K, V> ConcurrentHashMap <K, V> where K: Hash + PartialEq + Clone, V: Clone
         }
     }
 
+    /// gets the key from this hashtable if it exists
     pub fn get (&self, key: &K) -> Option<&V> {
         let hash = Self::make_hash(key);
         let segment = self.segment_index(hash);
@@ -36,7 +38,7 @@ impl <K, V> ConcurrentHashMap <K, V> where K: Hash + PartialEq + Clone, V: Clone
         self.segments[segment].get_mut(key, hash)
     }
 
-    /// Searchs for key in the hashmap. if a value exists, calls func on the value yielding a new value which is replaced in the same transaction
+    /// Searches for key in the hashmap. if a value exists, calls func on the value yielding a new value which is replaced in the same transaction
     pub fn get_modify <F> (&self, key: &K, func: F) -> Option<&V> where F: Fn(&V) -> V {
         let hash = Self::make_hash(key);
         let segment = self.segment_index(hash);
@@ -55,6 +57,7 @@ impl <K, V> ConcurrentHashMap <K, V> where K: Hash + PartialEq + Clone, V: Clone
         self.segments[segment].delete(&key, hash);
     }
 
+    /// gets the segment number given a hash
     fn segment_index (&self, hash: usize) -> usize {
         hash >> 4 & (self.segments.len() - 1)
     }
@@ -66,11 +69,14 @@ impl <K, V> ConcurrentHashMap <K, V> where K: Hash + PartialEq + Clone, V: Clone
     }
 }
 
+/// this is silly and awful. for small enough lists < 64 items we just use a stack allocated array
+/// kind of pointless given that the LinkedLists are heap allocated anyways and we use them for each bucket.
 enum InlineVec <T> {
     Static(usize, [Vec<T>; 64]),
     Dynamic(Vec<Vec<T>>)
 }
 
+/// A Segment is a write locked subset of a hashmap. Multiple reads can be done concurrently on a single segment.
 pub struct Segment <K, V> where K: Hash + PartialEq + Clone, V: Clone{
     count: AtomicUsize,
     table: RwLock<InlineVec<HashEntry<K, V>>>,
@@ -144,7 +150,7 @@ impl <K, V> Segment <K, V> where K: Hash + PartialEq + Clone, V: Clone {
         }
     }
 
-    //see ConcurrentHashMap::get_mut above.
+    //see ConcurrentHashMap::get_mut above. you probably don't want to use this
     pub fn get_mut (&self, key: &K, hash: usize) -> Option<&mut V> {
         let count = self.count.load(Ordering::SeqCst);
         if count == 0 {
@@ -217,7 +223,7 @@ impl <K, V> Segment <K, V> where K: Hash + PartialEq + Clone, V: Clone {
 }
 
 #[derive(Clone)]
-pub struct HashEntry <K, V> where K: Hash + Clone, V: Clone {
+struct HashEntry <K, V> where K: Hash + Clone, V: Clone {
     key: K,
     val: V,
     hash: usize
