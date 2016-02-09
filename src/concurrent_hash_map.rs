@@ -215,6 +215,7 @@ impl <K, V> Segment <K, V> where K: Hash + PartialEq + Clone, V: Clone {
                 None => false,
                 Some(index_to_delete) => {
                     tab[index].remove(index_to_delete);
+                    self.count.fetch_sub(1, Ordering::SeqCst);
                     true
                 }
             }
