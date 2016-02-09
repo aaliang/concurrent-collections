@@ -2,7 +2,6 @@ use std::hash::{SipHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::RwLock;
 use std::{ptr, mem};
-use std::collections::LinkedList;
 
 pub struct ConcurrentHashMap <K, V> where K: Hash + PartialEq + Clone, V: Clone {
     segments: [Segment<K, V>; 16]
@@ -50,6 +49,12 @@ impl <K, V> ConcurrentHashMap <K, V> where K: Hash + PartialEq + Clone, V: Clone
         self.segments[segment].insert(key, hash, val);
     }
 
+    pub fn delete (&self, key: K) {
+        let hash = Self::make_hash(&key);
+        let segment = self.segment_index(hash);
+        self.segments[segment].delete(&key, hash);
+    }
+
     fn segment_index (&self, hash: usize) -> usize {
         hash >> 4 & (self.segments.len() - 1)
     }
@@ -62,8 +67,8 @@ impl <K, V> ConcurrentHashMap <K, V> where K: Hash + PartialEq + Clone, V: Clone
 }
 
 enum InlineVec <T> {
-    Static(usize, [LinkedList<T>; 64]),
-    Dynamic(Vec<LinkedList<T>>)
+    Static(usize, [Vec<T>; 64]),
+    Dynamic(Vec<Vec<T>>)
 }
 
 pub struct Segment <K, V> where K: Hash + PartialEq + Clone, V: Clone{
@@ -75,9 +80,9 @@ pub struct Segment <K, V> where K: Hash + PartialEq + Clone, V: Clone{
 impl <K, V> Segment <K, V> where K: Hash + PartialEq + Clone, V: Clone {
     pub fn new () -> Segment <K, V> {
         let stat = unsafe {
-            let mut stat:[LinkedList<HashEntry<K, V>>; 64] = mem::uninitialized();
+            let mut stat:[Vec<HashEntry<K, V>>; 64] = mem::uninitialized();
             for i in stat.iter_mut() {
-                ptr::write(i, LinkedList::new());
+                ptr::write(i, Vec::new());
             }
             stat
         };
@@ -108,7 +113,7 @@ impl <K, V> Segment <K, V> where K: Hash + PartialEq + Clone, V: Clone {
             }
         }
 
-        list.push_back(HashEntry {
+        list.push(HashEntry {
             key: key,
             val: val,
             hash: hash
@@ -183,6 +188,28 @@ impl <K, V> Segment <K, V> where K: Hash + PartialEq + Clone, V: Clone {
                     };
                     let as_raw_ptr = &mut s.val as *mut V;
                     Some(unsafe{&mut *as_raw_ptr})
+                }
+            }
+        }
+    }
+
+    pub fn delete (&self, key: &K, hash: usize) -> bool {
+        let count = self.count.load(Ordering::SeqCst);
+        if count == 0 {
+            false
+        } else {
+            let mut write = self.table.write().unwrap();
+            let mut tab = match *write {
+                InlineVec::Static(_, ref mut arr) => &mut arr[..],
+                InlineVec::Dynamic(ref mut vec) => &mut vec[..]
+            };
+            let index = hash & (self.capacity - 1);
+            let del_opt = tab[index].iter().enumerate().find(|&(_, e)| e.key == *key && e.hash == hash).map(|(i, _)| i);
+            match del_opt {
+                None => false,
+                Some(index_to_delete) => {
+                    tab[index].remove(index_to_delete);
+                    true
                 }
             }
         }
