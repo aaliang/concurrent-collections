@@ -109,7 +109,7 @@ impl <K, V> Segment <K, V> where K: Hash + PartialEq + Clone, V: Clone {
         let ref mut list = tab[index];
 
         for i in list.iter_mut() {
-            if i.hash == hash && i.key == key {
+            if i.key == key {
                 *i = HashEntry {
                     key: key.clone(),
                     val: val.clone(),
