@@ -9,7 +9,7 @@ pub struct ConcurrentHashMap <K, V> where K: Hash + PartialEq + Clone, V: Clone 
 }
 
 impl <K, V> ConcurrentHashMap <K, V> where K: Hash + PartialEq + Clone, V: Clone {
-    pub fn new () -> ConcurrentHashMap <K, V> {
+    pub fn new () -> ConcurrentHashMap<K, V> {
         let seg = unsafe {
             let mut seg:[Segment<K,V>; 16] = mem::uninitialized();
             for i in seg.iter_mut() {
@@ -51,10 +51,10 @@ impl <K, V> ConcurrentHashMap <K, V> where K: Hash + PartialEq + Clone, V: Clone
         self.segments[segment].insert(key, hash, val);
     }
 
-    pub fn delete (&self, key: K) {
+    pub fn delete (&self, key: K) -> bool {
         let hash = Self::make_hash(&key);
         let segment = self.segment_index(hash);
-        self.segments[segment].delete(&key, hash);
+        self.segments[segment].delete(&key, hash)
     }
 
     /// gets the segment number given a hash
@@ -228,4 +228,59 @@ struct HashEntry <K, V> where K: Hash + Clone, V: Clone {
     key: K,
     val: V,
     hash: usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    //basic ops
+    #[test]
+    fn empty_get() {
+        let chm: ConcurrentHashMap<&str, i32> = ConcurrentHashMap::new();
+        assert_eq!(chm.get(&"empty"), None);
+    }
+
+    #[test]
+    fn inserts() {
+        let chm = ConcurrentHashMap::new();
+        chm.insert("hello", 3);
+        assert_eq!(chm.get(&"hello"), Some(&3));
+    }
+
+    #[test]
+    fn deletes() {
+        let chm = ConcurrentHashMap::new();
+        chm.insert("hello", 3);
+        assert_eq!(chm.delete(&"hello"), true);
+        assert_eq!(chm.get(&"hello"), None);
+    }
+
+    #[test]
+    fn get_modify() {
+        let chm = ConcurrentHashMap::new();
+        chm.insert("hello", 3);
+        chm.get_modify(&"hello", |x| x + 1);
+        assert_eq!(chm.get(&"hello"), Some(&4));
+    }
+
+    use std::thread;
+    use std::sync::Arc;
+    #[test]
+    fn concurrent_writes() {
+        let shared_map = Arc::new(ConcurrentHashMap::new());
+        let thandles = (0..16).map(|i| {
+            let local = shared_map.clone();
+            thread::spawn(move || {
+                local.insert(i.clone(), i);
+            })
+        });
+        for t in thandles {
+            let _ = t.join();
+        }
+        let main_instance = shared_map.clone();
+        for ref i in 0..16 {
+            assert_eq!(main_instance.get(i), Some(i));
+        }
+    }
+
 }
